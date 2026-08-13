@@ -1,0 +1,41 @@
+server:
+  port: ${SERVER_PORT:8090}
+
+spring:
+  application:
+    name: naicom-backlog-poster
+  datasource:
+    url: ${DB_URL:jdbc:oracle:thin:@//10.6.12.85:1521/TQPDB}
+    username: ${DB_USERNAME:TQ_EXC}
+    password: ${DB_PASSWORD:EXC_2024}
+    driver-class-name: oracle.jdbc.OracleDriver
+    hikari:
+      connection-timeout: 60000
+      maximum-pool-size: 5
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.OracleDialect
+        format_sql: true
+    show-sql: false
+
+naicom:
+  # Set to false once the NAICOM endpoint presents a certificate that can be
+  # validated normally. Kept true by default to match the working behaviour
+  # of the existing tps-apis integration (which disables TLS verification
+  # for this specific call), and is called out clearly in the docs/logs.
+  trust-all-ssl: true
+
+logging:
+  file:
+    name: logs/${spring.application.name}.log
+  pattern:
+    console: '%d{yyyy-MM-dd HH:mm:ss} %-5level %logger{36} - %msg%n'
+    file: '%d{yyyy-MM-dd HH:mm:ss} %-5level [%thread] %logger{36} - %msg%n'
+  level:
+    root: INFO
+    com.turnkey.naicombacklog: DEBUG
+    org.hibernate.SQL: WARN
