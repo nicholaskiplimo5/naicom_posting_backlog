@@ -66,7 +66,9 @@ public class NaicomPostingService {
 
     private static final String DEFAULT_STRING = "n/a";
     private static final String DEFAULT_YEAR_OF_MANUFACTURE = "2015";
-    private static final Date DEFAULT_DATE = new Date(70, 0, 1);
+    /** 1970-01-01. Handed out as a fresh instance per use: java.util.Date is mutable, and a
+     *  shared one would now be reachable from several concurrently-posted policies at once. */
+    private static final long DEFAULT_DATE_MILLIS = new Date(70, 0, 1).getTime();
 
     private final ParameterService parameterService;
     private final IncomingRequestService incomingRequestService;
@@ -219,7 +221,7 @@ public class NaicomPostingService {
                 .build();
 
         String jsonStr = writeJson(requestPayload);
-        log.info("Posting AUTO payload to NAICOM: {}", jsonStr);
+        log.debug("Posting AUTO payload to NAICOM: {}", jsonStr);
 
         ResponseEntity<Object> postingResponseObject = thirdPartyApiClient.postTransaction(policyPostingParameter, jsonStr);
         HttpStatus policyStatus = HttpStatus.valueOf(postingResponseObject.getStatusCode().value());
@@ -385,7 +387,7 @@ public class NaicomPostingService {
                 .build();
 
         String jsonStr = writeJson(requestPayload);
-        log.info("Posting {} payload to NAICOM: {}", type, jsonStr);
+        log.debug("Posting {} payload to NAICOM: {}", type, jsonStr);
 
         ResponseEntity<Object> postingResponseObject = thirdPartyApiClient.postTransaction(policyPostingParameter, jsonStr);
         HttpStatus policyStatus = HttpStatus.valueOf(postingResponseObject.getStatusCode().value());
@@ -952,8 +954,8 @@ public class NaicomPostingService {
                 insuredInfo.setAuto_note(defaultIfBlank(insuredInfo.getAuto_note(), DEFAULT_STRING));
                 insuredInfo.setVehicle_mileage(insuredInfo.getVehicle_mileage() == null ? BigDecimal.ZERO : insuredInfo.getVehicle_mileage());
                 insuredInfo.setSeats(insuredInfo.getSeats() == null ? 0 : insuredInfo.getSeats());
-                insuredInfo.setRegistration_date(insuredInfo.getRegistration_date() == null ? DEFAULT_DATE : insuredInfo.getRegistration_date());
-                insuredInfo.setRegistration_expiry_date(insuredInfo.getRegistration_expiry_date() == null ? DEFAULT_DATE : insuredInfo.getRegistration_expiry_date());
+                insuredInfo.setRegistration_date(insuredInfo.getRegistration_date() == null ? defaultDate() : insuredInfo.getRegistration_date());
+                insuredInfo.setRegistration_expiry_date(insuredInfo.getRegistration_expiry_date() == null ? defaultDate() : insuredInfo.getRegistration_expiry_date());
             }
         }
         return foundErrors;
@@ -1948,6 +1950,10 @@ public class NaicomPostingService {
     // Helpers
     // -------------------------------------------------------------------------------
 
+    private static Date defaultDate() {
+        return new Date(DEFAULT_DATE_MILLIS);
+    }
+
     private static boolean isBlank(String value) {
         return value == null || value.isEmpty();
     }
@@ -2000,6 +2006,12 @@ public class NaicomPostingService {
 
     private IncomingRequest saveIncomingRequestSafely(IncomingRequest incomingRequest) {
         try {
+            if (incomingRequest.getId() != null) {
+                // Already inserted, so this is the post-call outcome write. Update the two fields
+                // directly rather than save()/merge, which would SELECT the row back first.
+                incomingRequestService.updateOutcome(incomingRequest);
+                return incomingRequest;
+            }
             return incomingRequestService.save(incomingRequest);
         } catch (Exception e) {
             log.warn("Failed to persist incoming-request audit log (continuing anyway): {}", e.getMessage());

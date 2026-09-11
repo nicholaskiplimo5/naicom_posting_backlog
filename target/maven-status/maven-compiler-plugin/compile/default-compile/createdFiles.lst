@@ -19,6 +19,7 @@ com\turnkey\naicombacklog\enums\NaicomProduct.class
 com\turnkey\naicombacklog\repository\IncomingRequestRepository.class
 com\turnkey\naicombacklog\enums\ClientType.class
 com\turnkey\naicombacklog\dto\PremisesDetailsDto.class
+com\turnkey\naicombacklog\service\BacklogPostingResult.class
 com\turnkey\naicombacklog\service\BacklogFailureLogService.class
 com\turnkey\naicombacklog\dao\BacklogSelectDao$BacklogRecord.class
 com\turnkey\naicombacklog\dto\regulatorPayload\PolicyTransactionResponseDto.class
@@ -29,6 +30,7 @@ com\turnkey\naicombacklog\dto\AccidentDetailsDto.class
 com\turnkey\naicombacklog\dto\CoinsuranceDto.class
 com\turnkey\naicombacklog\dto\naicom\NaicomBuildingAttributesDto$NaicomBuildingAttributesDtoBuilder.class
 com\turnkey\naicombacklog\dto\naicom\NaicomPolicyResponseDto.class
+com\turnkey\naicombacklog\service\BacklogService$RunProgress.class
 com\turnkey\naicombacklog\dto\CoinsuranceDto$CoinsuranceDtoBuilder.class
 com\turnkey\naicombacklog\enums\BondBeneficiaryType.class
 com\turnkey\naicombacklog\dao\PolicyTransactionDao.class
@@ -45,7 +47,9 @@ com\turnkey\naicombacklog\service\NaicomPostingService.class
 com\turnkey\naicombacklog\model\Parameter.class
 com\turnkey\naicombacklog\config\RestClientConfig.class
 com\turnkey\naicombacklog\enums\CoverType.class
+com\turnkey\naicombacklog\service\BacklogService$RunProgress$Tick.class
 com\turnkey\naicombacklog\enums\BacklogStage.class
+com\turnkey\naicombacklog\service\BacklogPostingResult$BacklogPostingResultBuilder.class
 com\turnkey\naicombacklog\dto\GroupDto$GroupDtoBuilder.class
 com\turnkey\naicombacklog\dto\naicom\NaicomPropertyAttributeDto$NaicomPropertyAttributeDtoBuilder.class
 com\turnkey\naicombacklog\service\GenerateRegulatorPayloadService.class

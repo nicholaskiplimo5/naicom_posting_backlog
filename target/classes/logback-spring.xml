@@ -3,6 +3,7 @@
     <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
 
     <property name="LOG_FILE" value="logs/naicom-backlog-poster.log"/>
+    <springProperty name="APP_LOG_LEVEL" source="logging.level.com.turnkey.naicombacklog" defaultValue="INFO"/>
 
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
@@ -23,13 +24,39 @@
         </encoder>
     </appender>
 
-    <root level="INFO">
+    <!--
+        Both appenders below write synchronously and hold a lock while doing so. A backlog run logs
+        the full NAICOM payload for every policy, from several threads at once, so with the plain
+        appenders the posting threads spend their time queued behind console and disk I/O. Wrapping
+        them hands each event to a background writer instead.
+
+        discardingThreshold=0 keeps INFO/DEBUG events instead of dropping them when the queue fills;
+        the run then blocks on a genuinely full queue rather than losing the audit trail silently.
+    -->
+    <appender name="ASYNC_CONSOLE" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>8192</queueSize>
+        <discardingThreshold>0</discardingThreshold>
         <appender-ref ref="CONSOLE"/>
+    </appender>
+
+    <appender name="ASYNC_FILE" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>8192</queueSize>
+        <discardingThreshold>0</discardingThreshold>
         <appender-ref ref="FILE"/>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="ASYNC_CONSOLE"/>
+        <appender-ref ref="ASYNC_FILE"/>
     </root>
 
-    <logger name="com.turnkey.naicombacklog" level="DEBUG" additivity="false">
-        <appender-ref ref="CONSOLE"/>
-        <appender-ref ref="FILE"/>
+    <!--
+        Was hardcoded to DEBUG. Set logging.level.com.turnkey.naicombacklog=DEBUG (property or
+        env var) to get that back for a single run; leaving it at DEBUG permanently means every
+        policy writes its staged payload twice over.
+    -->
+    <logger name="com.turnkey.naicombacklog" level="${APP_LOG_LEVEL}" additivity="false">
+        <appender-ref ref="ASYNC_CONSOLE"/>
+        <appender-ref ref="ASYNC_FILE"/>
     </logger>
 </configuration>

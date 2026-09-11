@@ -36,6 +36,24 @@ import java.util.List;
 @RequiredArgsConstructor
 public class PolicyTransactionDao {
 
+    /**
+     * Rows the Oracle driver pulls per network round trip when reading the backlog cursor
+     * (the driver default is 10).
+     * <p>
+     * Measured against TQPDB on a 180,952-row NB backlog this is worth about 7% - 207s at the
+     * default versus 193s here - and no more, because the cost is not the round trips: a REF
+     * CURSOR runs its query lazily as rows are pulled, so nearly all of that time is
+     * {@code get_backlog_policies_prc} executing, not the network. What actually makes the
+     * select cheap is asking for a chunk: see {@link #findPoliciesNotPostedToNAICOM(String, int, int)}.
+     */
+    private static final int BACKLOG_FETCH_SIZE = 5000;
+
+    /** Avoids ~15 array copies while a large backlog list grows from ArrayList's default of 10. */
+    private static final int INITIAL_BACKLOG_CAPACITY = 10_000;
+
+    /** Rows per round trip when reading one policy's risks - enough for a fleet in a single trip. */
+    private static final int RISK_FETCH_SIZE = 200;
+
     private final JdbcTemplate jdbcTemplate;
     private final GinPolicyTransactionRepository policyTransactionRepository;
     private final ObjectMapper objectMapper;
@@ -51,7 +69,8 @@ public class PolicyTransactionDao {
         }
         String query = "{ call gin_interfaces_cursor.get_policy_transaction_prc(?,?) }";
         try (Connection conn = jdbcTemplate.getDataSource().getConnection();
-             CallableStatement cst = conn.prepareCall(query, ResultSet.TYPE_SCROLL_INSENSITIVE, ResultSet.CONCUR_READ_ONLY)) {
+             CallableStatement cst = conn.prepareCall(query, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)) {
+            cst.setFetchSize(RISK_FETCH_SIZE);
             cst.setBigDecimal(1, policyBatchNo);
             cst.registerOutParameter(2, Types.REF_CURSOR);
             cst.executeQuery();
@@ -60,12 +79,18 @@ public class PolicyTransactionDao {
                     log.info("get_policy_transaction_prc returned no cursor for batch {}", policyBatchNo);
                     return transactions;
                 }
+                rs.setFetchSize(RISK_FETCH_SIZE);
                 while (rs.next()) {
                     transactions.add(mapRow(rs));
                 }
             }
         } catch (Exception e) {
-            log.error("Failed to fetch policy details for batch {}: {}", policyBatchNo, e.getMessage(), e);
+            // An empty list means "this batch has no risks" and callers treat it as a data
+            // problem for that one policy. A failed query is not that, so it must not return
+            // empty and be mistaken for it - staging would report "no policy details found"
+            // for what is really a dead connection.
+            throw new IllegalStateException("Failed to fetch policy details for batch "
+                    + policyBatchNo + ": " + e.getMessage(), e);
         }
         return transactions;
     }
@@ -152,7 +177,10 @@ public class PolicyTransactionDao {
         t.setVEHICLE_MAKE(rs.getString("VEHICLE_MAKE"));
         t.setVEHICLE_MODEL(rs.getString("VEHICLE_MODEL"));
         t.setVEHICLE_REGISTRATION(rs.getString("VEHICLE_REGISTRATION"));
-        t.setYEAR_OF_MANUFACTURE(rs.getString("YEAR_OF_MANUFACTURE"));
+        t.setYEAR_OF_MANUFACTURE(
+                (rs.getString("YEAR_OF_MANUFACTURE") == null || rs.getString("YEAR_OF_MANUFACTURE").equals("0"))
+                        ? "2000"
+                        : rs.getString("YEAR_OF_MANUFACTURE"));
         t.setCLIENT_DATE_OF_BIRTH(rs.getString("CLIENT_DATE_OF_BIRTH"));
         t.setCOLOR(rs.getString("COLOR"));
         t.setCLIENT_TYPE(rs.getString("CLIENT_TYPE"));
@@ -240,32 +268,61 @@ public class PolicyTransactionDao {
         return t;
     }
 
-    private List<StagingRequirement> getAdditionalInfo(BigDecimal policyBatchNo) {
-        List<StagingRequirement> additions = new ArrayList<>();
-        String query = "SELECT POL_AGNT_AGENT_CODE, POL_PRP_CODE FROM GIN_POLICIES WHERE POL_BATCH_NO = ?";
-        String sequenceQuery = "SELECT GIN_GTP_CODE_SEQ.NEXTVAL FROM DUAL";
-        try (Connection conn = jdbcTemplate.getDataSource().getConnection()) {
-            StagingRequirement requirement = new StagingRequirement();
-            try (PreparedStatement pst = conn.prepareStatement(query)) {
-                pst.setBigDecimal(1, policyBatchNo);
-                try (ResultSet rs = pst.executeQuery()) {
-                    while (rs.next()) {
-                        requirement.setAgnCode(rs.getBigDecimal(1));
-                        requirement.setPrpCode(rs.getBigDecimal(2));
-                    }
+    /**
+     * Agent/product code plus the next GTP_CODE, needed only when a batch is being staged for the
+     * first time. The sequence is drawn in the same statement as the GIN_POLICIES lookup (one
+     * round trip instead of two), and no sequence value is burned when the policy row is missing.
+     */
+    private StagingRequirement getAdditionalInfo(BigDecimal policyBatchNo) {
+        String query = "SELECT POL_AGNT_AGENT_CODE, POL_PRP_CODE, GIN_GTP_CODE_SEQ.NEXTVAL " +
+                "FROM GIN_POLICIES WHERE POL_BATCH_NO = ?";
+        try (Connection conn = jdbcTemplate.getDataSource().getConnection();
+             PreparedStatement pst = conn.prepareStatement(query)) {
+            pst.setBigDecimal(1, policyBatchNo);
+            try (ResultSet rs = pst.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
                 }
+                StagingRequirement requirement = new StagingRequirement();
+                requirement.setAgnCode(rs.getBigDecimal(1));
+                requirement.setPrpCode(rs.getBigDecimal(2));
+                requirement.setCode(rs.getBigDecimal(3));
+                return requirement;
             }
-            try (PreparedStatement pst = conn.prepareStatement(sequenceQuery);
-                 ResultSet rs = pst.executeQuery()) {
-                while (rs.next()) {
-                    requirement.setCode(rs.getBigDecimal(1));
-                }
-            }
-            additions.add(requirement);
         } catch (Exception e) {
-            log.error("Failed to fetch staging requirement (agent/prp code, next GTP_CODE) for batch {}: {}", policyBatchNo, e.getMessage(), e);
+            // null means "no GIN_POLICIES row for this batch", which saveDetails reports as
+            // "cannot stage". A failed query is a different thing and must say so - swallowing
+            // it here is what made a dropped connection surface as the misleading
+            // "Could not resolve agent/prp code for batch ... - cannot stage".
+            throw new IllegalStateException("Failed to fetch staging requirement (agent/prp code, "
+                    + "next GTP_CODE) for batch " + policyBatchNo + ": " + e.getMessage(), e);
         }
-        return additions;
+    }
+
+    /**
+     * Removes the batch's staged row so staging can put a fresh one back.
+     * <p>
+     * Ported from tps-apis' {@code deletePolicyFromGinPoliciesTransaction}, which backs the
+     * {@code /restage} endpoint - with one deliberate narrowing. That method deletes every row for
+     * the batch whatever its regulator, which also takes out the batch's NIID staging. Fine for a
+     * one-policy operator call; not fine here, where a backlog run would clear the NIID row of every
+     * policy it walks past. So the delete is scoped by regulator, the same way
+     * {@link #saveDetails} scopes its update.
+     *
+     * @return rows removed. Zero is normal, not an error - it just means this batch had never
+     *         been staged, which is the common case for a backlog policy.
+     */
+    public int deleteStagedPolicy(BigDecimal policyBatchNo, String regulator) {
+        String delete = "DELETE FROM GIN_POLICY_TRANSACTIONS WHERE GTP_POL_BATCH_NO = ? AND GTP_TARGET_REGULATOR = ?";
+        try {
+            return jdbcTemplate.update(delete, policyBatchNo, regulator);
+        } catch (Exception e) {
+            // Must not be swallowed. The caller follows this with an unconditional INSERT, so a
+            // delete that silently failed would leave the batch with two staged rows and let
+            // posting pick either one.
+            throw new IllegalStateException("Failed to delete staged " + regulator + " row for batch "
+                    + policyBatchNo + ": " + e.getMessage(), e);
+        }
     }
 
     /**
@@ -273,17 +330,16 @@ public class PolicyTransactionDao {
      * into GIN_POLICY_TRANSACTIONS.
      */
     public boolean saveDetails(BigDecimal policyBatchNo, String payload, String postingLevel, String regulator, BigDecimal ipuCode) {
-        List<StagingRequirement> info = getAdditionalInfo(policyBatchNo);
-        if (info.isEmpty()) {
-            log.error("Could not resolve agent/prp code for batch {} - cannot stage", policyBatchNo);
-            return false;
-        }
-        StagingRequirement requirement = info.get(0);
+        return saveDetails(policyBatchNo, payload, postingLevel, regulator, ipuCode, false);
+    }
 
-        List<GinPolicyTransactionEntity> existing = "R".equalsIgnoreCase(postingLevel)
-                ? policyTransactionRepository.findByGtpPolBatchNoAndGtpTargetRegulatorAndGtpIpuCode(policyBatchNo, regulator, ipuCode)
-                : policyTransactionRepository.findAllByGtpPolBatchNoAndGtpTargetRegulator(policyBatchNo, regulator);
-
+    /**
+     * @param replaceExisting true when the caller has already cleared the batch's staged row with
+     *                        {@link #deleteStagedPolicy}. The UPDATE probe below cannot match in
+     *                        that case, so it is skipped rather than spent on every policy.
+     */
+    public boolean saveDetails(BigDecimal policyBatchNo, String payload, String postingLevel, String regulator, BigDecimal ipuCode,
+                               boolean replaceExisting) {
         String insert = "INSERT INTO GIN_POLICY_TRANSACTIONS (GTP_CODE, GTP_POL_BATCH_NO, GTP_PRP_CODE, GTP_AGN_CODE, " +
                 "GTP_RESPONSE, GTP_RETRY_COUNTS, GTP_POSTED_STATUS, GTP_TARGET_REGULATOR, GTP_PAYLOAD, " +
                 "GTP_POSTING_LEVEL, GTP_IPU_CODE, GTP_MODULE, GTP_REQUEST_ID, GTP_TRANS_NO) " +
@@ -291,28 +347,53 @@ public class PolicyTransactionDao {
         String update = "UPDATE GIN_POLICY_TRANSACTIONS SET GTP_PAYLOAD = ? WHERE GTP_POL_BATCH_NO = ? AND GTP_TARGET_REGULATOR = ?";
 
         try (Connection conn = jdbcTemplate.getDataSource().getConnection()) {
-            if (existing.isEmpty()) {
-                try (PreparedStatement pst = conn.prepareStatement(insert)) {
-                    pst.setBigDecimal(1, requirement.getCode());
-                    pst.setBigDecimal(2, policyBatchNo);
-                    pst.setBigDecimal(3, requirement.getPrpCode());
-                    pst.setBigDecimal(4, requirement.getAgnCode());
-                    pst.setString(5, regulator);
-                    pst.setString(6, payload);
-                    pst.setString(7, postingLevel);
-                    pst.setBigDecimal(8, ipuCode);
-                    pst.setString(9, "U");
-                    pst.setString(10, null);
-                    pst.setNull(11, Types.BIGINT);
-                    pst.executeUpdate();
+            if ("R".equalsIgnoreCase(postingLevel)) {
+                // Risk-level staging is keyed by IPU code as well, which the UPDATE below does not
+                // filter on, so that path keeps the explicit existence check.
+                List<GinPolicyTransactionEntity> existing = policyTransactionRepository
+                        .findByGtpPolBatchNoAndGtpTargetRegulatorAndGtpIpuCode(policyBatchNo, regulator, ipuCode);
+                if (!existing.isEmpty()) {
+                    try (PreparedStatement pst = conn.prepareStatement(update)) {
+                        pst.setString(1, payload);
+                        pst.setBigDecimal(2, policyBatchNo);
+                        pst.setString(3, regulator);
+                        pst.executeUpdate();
+                    }
+                    return true;
                 }
-            } else {
+            } else if (!replaceExisting) {
+                // Try the UPDATE first and let its row count answer "is this batch already staged?".
+                // The old flow answered that with a separate JPA select, and unconditionally spent two
+                // more round trips resolving the agent/prp code and next sequence value even on the
+                // update path, where neither is used.
                 try (PreparedStatement pst = conn.prepareStatement(update)) {
                     pst.setString(1, payload);
                     pst.setBigDecimal(2, policyBatchNo);
                     pst.setString(3, regulator);
-                    pst.executeUpdate();
+                    if (pst.executeUpdate() > 0) {
+                        return true;
+                    }
                 }
+            }
+
+            StagingRequirement requirement = getAdditionalInfo(policyBatchNo);
+            if (requirement == null) {
+                log.error("Could not resolve agent/prp code for batch {} - cannot stage", policyBatchNo);
+                return false;
+            }
+            try (PreparedStatement pst = conn.prepareStatement(insert)) {
+                pst.setBigDecimal(1, requirement.getCode());
+                pst.setBigDecimal(2, policyBatchNo);
+                pst.setBigDecimal(3, requirement.getPrpCode());
+                pst.setBigDecimal(4, requirement.getAgnCode());
+                pst.setString(5, regulator);
+                pst.setString(6, payload);
+                pst.setString(7, postingLevel);
+                pst.setBigDecimal(8, ipuCode);
+                pst.setString(9, "U");
+                pst.setString(10, null);
+                pst.setNull(11, Types.BIGINT);
+                pst.executeUpdate();
             }
             return true;
         } catch (Exception e) {
@@ -330,8 +411,10 @@ public class PolicyTransactionDao {
             cst.execute();
             return cst.getString(1);
         } catch (Exception e) {
-            log.error("Failed to fetch previous policy unique id for batch {}: {}", policyBatchNo, e.getMessage(), e);
-            return null;
+            // Payload-shaping read: returning null on a failed query would stage the policy as
+            // though it had no previous policy id, changing how it is dispatched to NAICOM.
+            throw new IllegalStateException("Failed to fetch previous policy unique id for batch "
+                    + policyBatchNo + ": " + e.getMessage(), e);
         }
     }
 
@@ -350,7 +433,8 @@ public class PolicyTransactionDao {
                 }
             }
         } catch (Exception e) {
-            log.error("Failed to fetch coinsurance details for batch {}: {}", policyBatchNo, e.getMessage(), e);
+            throw new IllegalStateException("Failed to fetch coinsurance details for batch "
+                    + policyBatchNo + ": " + e.getMessage(), e);
         }
         return result;
     }
@@ -371,7 +455,10 @@ public class PolicyTransactionDao {
                 }
             }
         } catch (Exception e) {
-            log.error("Failed to fetch coinsurer details for batch {}: {}", policyBatchNo, e.getMessage(), e);
+            // Same reasoning: an empty list here would post a coinsurance policy with no
+            // coinsurers attached rather than failing the batch.
+            throw new IllegalStateException("Failed to fetch coinsurer details for batch "
+                    + policyBatchNo + ": " + e.getMessage(), e);
         }
         return result;
     }
@@ -439,10 +526,37 @@ public class PolicyTransactionDao {
      * GIN_POLICY_TRANSACTIONS with GTP_TARGET_REGULATOR = 'NAICOM').
      */
     public List<BigDecimal> findPoliciesNotPostedToNAICOM(String transactionType) {
-        List<BigDecimal> batchNumbers = new ArrayList<>();
+        return findPoliciesNotPostedToNAICOM(transactionType, 0, 0);
+    }
+
+    /**
+     * Chunked variant of {@link #findPoliciesNotPostedToNAICOM(String)}: skips {@code offset}
+     * batch numbers and returns at most {@code limit} of them ({@code limit <= 0} means all).
+     * <p>
+     * This is the change that actually makes the select fast. The procedure's cursor produces
+     * rows lazily, so abandoning it after {@code limit} rows means the rest of the query never
+     * runs. Measured against TQPDB on the NB backlog:
+     * <pre>
+     *   limit = 1,000    2.2s
+     *   limit = 5,000    2.9s
+     *   limit = 0 (all)  193s   (180,952 rows)
+     * </pre>
+     * <p>
+     * {@code offset} is not free for the same reason - skipped rows still have to be produced,
+     * at roughly a millisecond each. Prefer walking the backlog with {@code offset=0} and
+     * repeated calls (posted policies drop out of the selection) over paging with a large
+     * offset; reach for offset only to step over a block of policies that keep failing.
+     */
+    public List<BigDecimal> findPoliciesNotPostedToNAICOM(String transactionType, int offset, int limit) {
+        int skip = Math.max(0, offset);
+        boolean bounded = limit > 0;
+        List<BigDecimal> batchNumbers = new ArrayList<>(bounded ? limit : INITIAL_BACKLOG_CAPACITY);
         String query = "{ call get_backlog_policies_prc(?,?) }";
+        long startedAt = System.currentTimeMillis();
+
         try (Connection conn = jdbcTemplate.getDataSource().getConnection();
-             CallableStatement cst = conn.prepareCall(query, ResultSet.TYPE_SCROLL_INSENSITIVE, ResultSet.CONCUR_READ_ONLY)) {
+             CallableStatement cst = conn.prepareCall(query, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)) {
+            cst.setFetchSize(BACKLOG_FETCH_SIZE);
             cst.setString(1, transactionType);
             cst.registerOutParameter(2, Types.REF_CURSOR);
             cst.executeQuery();
@@ -451,13 +565,34 @@ public class PolicyTransactionDao {
                     log.info("get_backlog_policies_prc returned no cursor for transaction type {}", transactionType);
                     return batchNumbers;
                 }
+                // The ref cursor's result set does not reliably inherit the statement's fetch
+                // size, so set it here too. Worth a few percent (see BACKLOG_FETCH_SIZE) - the
+                // early break below is what does the real work.
+                rs.setFetchSize(BACKLOG_FETCH_SIZE);
+                int skipped = 0;
                 while (rs.next()) {
+                    if (skipped < skip) {
+                        skipped++;
+                        continue;
+                    }
                     batchNumbers.add(rs.getBigDecimal(1));
+                    if (bounded && batchNumbers.size() >= limit) {
+                        break;
+                    }
                 }
             }
         } catch (Exception e) {
-            log.error("Failed to fetch backlog policies not posted to NAICOM for transaction type {}: {}", transactionType, e.getMessage(), e);
+            // Deliberately NOT swallowed. This used to log and return whatever had accumulated,
+            // so a connection dropped mid-cursor looked like a short-but-complete backlog: on
+            // 2026-09-08 a broken connection produced "batchCount=34450" and then "batchCount=31370"
+            // against a real backlog of ~180,000, and the run processed those as the whole thing.
+            // A failed select must fail, not quietly return a partial answer.
+            throw new IllegalStateException("Failed to fetch backlog policies for transaction type "
+                    + transactionType + " after " + batchNumbers.size() + " rows: " + e.getMessage(), e);
         }
+
+        log.info("Fetched {} backlog batch numbers (offset={}, limit={}) for transaction type {} in {} ms",
+                batchNumbers.size(), skip, bounded ? limit : "all", transactionType, System.currentTimeMillis() - startedAt);
         return batchNumbers;
     }
 }

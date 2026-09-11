@@ -48,11 +48,18 @@ public class IncomingRequest {
     @Column(name = "IC_SUCCEEDED")
     private Boolean success;
 
-    @Lob
-    @Column(name = "IC_REQUEST_BODY")
+    /*
+     * NOT @Lob. Both columns are VARCHAR2(4000) in tex_incoming_requests, not CLOB - @Lob made
+     * Hibernate call ResultSet.getClob() on them, which Oracle answers with
+     * "getCLOB not implemented for class oracle.jdbc.driver.T4CVarcharAccessor". That threw on
+     * every read of the entity, so the response-body update after each posting always failed
+     * (silently, into saveIncomingRequestSafely's catch): IC_RESPONSE_BODY was null and
+     * IC_SUCCEEDED stuck at 0 on every row, even for successful posts.
+     * IncomingRequestService.truncate keeps values inside 4000.
+     */
+    @Column(name = "IC_REQUEST_BODY", length = 4000)
     private String requestBody;
 
-    @Lob
-    @Column(name = "IC_RESPONSE_BODY")
+    @Column(name = "IC_RESPONSE_BODY", length = 4000)
     private String responseBody;
 }

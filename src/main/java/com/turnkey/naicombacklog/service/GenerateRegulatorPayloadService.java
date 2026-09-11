@@ -6,6 +6,7 @@ import com.turnkey.naicombacklog.dto.regulatorPayload.Coinsurance;
 import com.turnkey.naicombacklog.dto.regulatorPayload.NaicomInsuredInfo;
 import com.turnkey.naicombacklog.dto.regulatorPayload.NiidCustomer;
 import com.turnkey.naicombacklog.dto.regulatorPayload.NiidData;
+import com.turnkey.naicombacklog.dto.regulatorPayload.PolicyCoinsuranceDto;
 import com.turnkey.naicombacklog.dto.regulatorPayload.PolicyTransactionDto;
 import com.turnkey.naicombacklog.dto.regulatorPayload.PolicyTransactionResponseDto;
 import lombok.RequiredArgsConstructor;
@@ -40,12 +41,26 @@ public class GenerateRegulatorPayloadService {
     private final PolicyTransactionDao policyTransactionDao;
 
     public PolicyTransactionResponseDto generateNaicomPayload(PolicyTransactionDto transaction) {
+        return generateNaicomPayload(transaction, null);
+    }
+
+    /**
+     * @param preFetchedRisks the batch's risk rows if the caller has already loaded them (staging
+     *                        always has), so the {@code get_policy_transaction_prc} cursor is not
+     *                        re-opened for the very same batch while building the payload. Pass
+     *                        {@code null} to have them fetched on demand.
+     */
+    public PolicyTransactionResponseDto generateNaicomPayload(PolicyTransactionDto transaction,
+                                                              List<PolicyTransactionDto> preFetchedRisks) {
         PolicyTransactionResponseDto response = new PolicyTransactionResponseDto();
         response.setRequestCalled(false);
 
-        List<Coinsurance> coinsurance = policyTransactionDao.getCoinsuranceDetails(transaction.getPOL_BATCH_NO());
-        String policyCoinLeader = policyTransactionDao.getColumnValue("GIN_POLICIES", "POL_COINSURE_LEADER", "POL_BATCH_NO", transaction.getPOL_BATCH_NO().toString());
-        String policyCoinShare = policyTransactionDao.getColumnValue("GIN_POLICIES", "POL_COINSURANCE_SHARE", "POL_BATCH_NO", transaction.getPOL_BATCH_NO().toString());
+        // One query for both coinsurance header columns rather than two single-column lookups.
+        // The coinsurer list itself is now fetched only inside the branch that consumes it, since
+        // the large majority of policies are not coinsurance leaders.
+        List<PolicyCoinsuranceDto> coinsuranceHeader = policyTransactionDao.getPolicyCoinsuranceDetails(transaction.getPOL_BATCH_NO());
+        String policyCoinLeader = coinsuranceHeader.isEmpty() ? null : coinsuranceHeader.get(0).getPolicyCoinLeader();
+        BigDecimal policyCoinShare = coinsuranceHeader.isEmpty() ? null : coinsuranceHeader.get(0).getPolicyCoinShare();
 
         String coverTo = checkPolicyCoverPeriod(transaction) ? adjustCoverFrom(transaction) : transaction.getPOL_POLICY_COVER_TO();
 
@@ -97,8 +112,8 @@ public class GenerateRegulatorPayloadService {
         if (transaction.getPOL_COINSURANCE() != null && "YES".equalsIgnoreCase(transaction.getPOL_COINSURANCE())
                 && policyCoinLeader != null && "Y".equalsIgnoreCase(policyCoinLeader)) {
             data.setCoinsuranceLeader(policyCoinLeader);
-            data.setCoInsuranceRate(new BigDecimal(policyCoinShare));
-            data.setCoinsuranceDetails(coinsurance);
+            data.setCoInsuranceRate(policyCoinShare);
+            data.setCoinsuranceDetails(policyTransactionDao.getCoinsuranceDetails(transaction.getPOL_BATCH_NO()));
         }
         data.setCoinsurance(transaction.getPOL_COINSURANCE());
         data.setTransactionType(transaction.getTransType());
@@ -109,7 +124,7 @@ public class GenerateRegulatorPayloadService {
 
         switch (prg.trim()) {
             case "AUTO":
-                transRisks = policyTransactionDao.getPolicyDetails(transaction.getPOL_BATCH_NO());
+                transRisks = risksFor(transaction, preFetchedRisks);
                 for (PolicyTransactionDto risk : transRisks) {
                     NaicomInsuredInfo insured = new NaicomInsuredInfo();
                     insured.setAutoNote("n/a");
@@ -256,7 +271,7 @@ public class GenerateRegulatorPayloadService {
                 data.setTerms(null);
                 data.setMarineCoverType(transaction.getPOLICY_COVER_TYPE_CODE().replace("-", "_"));
 
-                transRisks = policyTransactionDao.getPolicyDetails(transaction.getPOL_BATCH_NO());
+                transRisks = risksFor(transaction, preFetchedRisks);
                 for (PolicyTransactionDto risk : transRisks) {
                     NaicomInsuredInfo insured = new NaicomInsuredInfo();
                     insured.setVesselBuildYear(risk.getVESSEL_BUILD_YEAR());
@@ -478,7 +493,7 @@ public class GenerateRegulatorPayloadService {
                 data.setTerms(null);
                 data.setMarineCoverType(transaction.getPOLICY_COVER_TYPE_CODE().replace("-", "_"));
 
-                transRisks = policyTransactionDao.getPolicyDetails(transaction.getPOL_BATCH_NO());
+                transRisks = risksFor(transaction, preFetchedRisks);
                 for (PolicyTransactionDto risk : transRisks) {
                     NaicomInsuredInfo insured = new NaicomInsuredInfo();
                     insured.setVesselBuildYear(risk.getVESSEL_BUILD_YEAR());
@@ -571,6 +586,11 @@ public class GenerateRegulatorPayloadService {
         Gson gson = new Gson();
         response.setRegulatorPayload(gson.toJson(data));
         return response;
+    }
+
+    /** The batch's risks, reusing what the caller already loaded rather than re-opening the cursor. */
+    private List<PolicyTransactionDto> risksFor(PolicyTransactionDto transaction, List<PolicyTransactionDto> preFetchedRisks) {
+        return preFetchedRisks != null ? preFetchedRisks : policyTransactionDao.getPolicyDetails(transaction.getPOL_BATCH_NO());
     }
 
     private String adjustCoverFrom(PolicyTransactionDto transaction) {

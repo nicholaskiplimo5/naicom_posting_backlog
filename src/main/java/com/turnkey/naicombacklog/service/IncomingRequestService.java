@@ -17,6 +17,12 @@ public class IncomingRequestService {
         return incomingRequestRepository.save(incomingRequest);
     }
 
+    /** Updates just the outcome fields of an already-inserted audit row - see the repository. */
+    public void updateOutcome(IncomingRequest incomingRequest) {
+        incomingRequestRepository.updateOutcome(
+                incomingRequest.getId(), incomingRequest.getSuccess(), incomingRequest.getResponseBody());
+    }
+
     public String truncate(String body) {
         if (body == null) {
             return null;
