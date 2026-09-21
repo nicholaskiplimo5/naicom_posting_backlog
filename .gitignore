@@ -1,0 +1,29 @@
+# Maven build output - classes, the jar, generated sources. Rebuilt by `mvn package`.
+target/
+
+# IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+.settings/
+.project
+.classpath
+nbproject/private/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Maven wrapper downloads
+.mvn/wrapper/maven-wrapper.jar
+
+# Local overrides - these hold real DB and NAICOM credentials, unlike the committed
+# application.yml, which only carries the defaults.
+src/main/resources/application-local.yml
+src/main/resources/application-local.properties
+
+# Runtime log output from the poster itself - the rolling log and its gzipped archives.
+# Untracked on 2026-09-21; the files stay on disk, git just stops following them.
+logs/
