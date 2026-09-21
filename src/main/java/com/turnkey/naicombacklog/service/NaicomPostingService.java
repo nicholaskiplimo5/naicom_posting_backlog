@@ -25,6 +25,7 @@ import com.turnkey.naicombacklog.repository.GinPolicyTransactionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -227,13 +228,10 @@ public class NaicomPostingService {
         HttpStatus policyStatus = HttpStatus.valueOf(postingResponseObject.getStatusCode().value());
         String jsonFormat = String.valueOf(postingResponseObject.getBody());
 
-        if (jsonFormat.contains("Encountered while posting Naicom Policy")) {
-            response.setMessage(jsonFormat);
-            response.setStatus(HttpStatus.REQUEST_TIMEOUT);
-            return response;
+        JSONObject jsonObject = parseJsonBody(jsonFormat);
+        if (jsonObject == null) {
+            return unreadableResponse(response, incomingRequest, policyStatus, jsonFormat);
         }
-
-        JSONObject jsonObject = new JSONObject(jsonFormat);
         String coinFeedBack = null;
         JSONArray errorMessage = jsonObject.optJSONArray("ErrMsgs");
         JSONArray errorCode = jsonObject.optJSONArray("ErrCodes");
@@ -295,7 +293,10 @@ public class NaicomPostingService {
 
         String jsonStr = writeJson(requestPayload);
         ResponseEntity<Object> postingResponseObject = thirdPartyApiClient.postTransaction(recordCoinsurance, jsonStr);
-        JSONObject jsonObject = new JSONObject(String.valueOf(postingResponseObject.getBody()));
+        JSONObject jsonObject = parseJsonBody(String.valueOf(postingResponseObject.getBody()));
+        if (jsonObject == null) {
+            return "error: NAICOM returned no usable response while recording the coinsurance policy";
+        }
         if (postingResponseObject.getStatusCode().value() == 200 && jsonObject.optBoolean("IsSucceed")) {
             return "coinsurance Policy recorded successfully";
         }
@@ -393,13 +394,10 @@ public class NaicomPostingService {
         HttpStatus policyStatus = HttpStatus.valueOf(postingResponseObject.getStatusCode().value());
         String jsonFormat = String.valueOf(postingResponseObject.getBody());
 
-        if (jsonFormat.contains("Encountered while posting Naicom Policy")) {
-            response.setMessage(jsonFormat);
-            response.setStatus(HttpStatus.REQUEST_TIMEOUT);
-            return response;
+        JSONObject jsonObject = parseJsonBody(jsonFormat);
+        if (jsonObject == null) {
+            return unreadableResponse(response, incomingRequest, policyStatus, jsonFormat);
         }
-
-        JSONObject jsonObject = new JSONObject(jsonFormat);
         String coinFeedBack = null;
         JSONArray errorMessage = jsonObject.optJSONArray("ErrMsgs");
         JSONArray errorCode = jsonObject.optJSONArray("ErrCodes");
@@ -491,13 +489,10 @@ public class NaicomPostingService {
         HttpStatus policyStatus = HttpStatus.valueOf(postingResponseObject.getStatusCode().value());
         String jsonFormat = String.valueOf(postingResponseObject.getBody());
 
-        if (jsonFormat.contains("Encountered while posting Naicom Policy")) {
-            response.setMessage(jsonFormat);
-            response.setStatus(HttpStatus.REQUEST_TIMEOUT);
-            return response;
+        JSONObject jsonObject = parseJsonBody(jsonFormat);
+        if (jsonObject == null) {
+            return unreadableResponse(response, incomingRequest, policyStatus, jsonFormat);
         }
-
-        JSONObject jsonObject = new JSONObject(jsonFormat);
         JSONArray errorMessage = jsonObject.optJSONArray("ErrMsgs");
         JSONArray errorCode = jsonObject.optJSONArray("ErrCodes");
         if (policyStatus.value() == 200 && jsonObject.optBoolean("IsSucceed")) {
@@ -578,13 +573,10 @@ public class NaicomPostingService {
         HttpStatus policyStatus = HttpStatus.valueOf(postingResponseObject.getStatusCode().value());
         String jsonFormat = String.valueOf(postingResponseObject.getBody());
 
-        if (jsonFormat.contains("Encountered while posting Naicom Policy")) {
-            response.setMessage(jsonFormat);
-            response.setStatus(HttpStatus.REQUEST_TIMEOUT);
-            return response;
+        JSONObject jsonObject = parseJsonBody(jsonFormat);
+        if (jsonObject == null) {
+            return unreadableResponse(response, incomingRequest, policyStatus, jsonFormat);
         }
-
-        JSONObject jsonObject = new JSONObject(jsonFormat);
         JSONArray errorMessage = jsonObject.optJSONArray("ErrMsgs");
         JSONArray errorCode = jsonObject.optJSONArray("ErrCodes");
         if (policyStatus.value() == 200 && jsonObject.optBoolean("IsSucceed")) {
@@ -657,10 +649,9 @@ public class NaicomPostingService {
         HttpStatus policyStatus = HttpStatus.valueOf(postingResponseObject.getStatusCode().value());
         String jsonFormat = String.valueOf(postingResponseObject.getBody());
 
-        if (jsonFormat.contains("Encountered while posting Naicom Policy")) {
-            response.setMessage(jsonFormat);
-            response.setStatus(HttpStatus.REQUEST_TIMEOUT);
-            return response;
+        JSONObject jsonObject = parseJsonBody(jsonFormat);
+        if (jsonObject == null) {
+            return unreadableResponse(response, incomingRequest, policyStatus, jsonFormat);
         }
 
         JsonNode rootNode;
@@ -681,7 +672,6 @@ public class NaicomPostingService {
             }
         }
 
-        JSONObject jsonObject = new JSONObject(jsonFormat);
         JSONArray errorMessage = jsonObject.optJSONArray("ErrMsgs");
         JSONArray errorCode = jsonObject.optJSONArray("ErrCodes");
         if (policyStatus.value() == 200 && isSucceed) {
@@ -749,7 +739,10 @@ public class NaicomPostingService {
         HttpStatus policyStatus = HttpStatus.valueOf(postingResponseObject.getStatusCode().value());
         String jsonFormat = String.valueOf(postingResponseObject.getBody());
 
-        JSONObject jsonObject = new JSONObject(jsonFormat);
+        JSONObject jsonObject = parseJsonBody(jsonFormat);
+        if (jsonObject == null) {
+            return unreadableResponse(response, incomingRequest, policyStatus, jsonFormat);
+        }
         JSONArray errorMessage = jsonObject.optJSONArray("ErrMsgs");
         JSONArray errorCode = jsonObject.optJSONArray("ErrCodes");
         if (policyStatus.value() == 200 && jsonObject.optBoolean("IsSucceed")) {
@@ -817,7 +810,10 @@ public class NaicomPostingService {
         HttpStatus policyStatus = HttpStatus.valueOf(postingResponseObject.getStatusCode().value());
         String jsonFormat = String.valueOf(postingResponseObject.getBody());
 
-        JSONObject jsonObject = new JSONObject(jsonFormat);
+        JSONObject jsonObject = parseJsonBody(jsonFormat);
+        if (jsonObject == null) {
+            return unreadableResponse(response, incomingRequest, policyStatus, jsonFormat);
+        }
         JSONArray errorMessage = jsonObject.optJSONArray("ErrMsgs");
         JSONArray errorCode = jsonObject.optJSONArray("ErrCodes");
         if (policyStatus.value() == 200 && jsonObject.optBoolean("IsSucceed")) {
@@ -1976,6 +1972,60 @@ public class NaicomPostingService {
         ArrayList<ErrorDto> errors = new ArrayList<>();
         errors.add(new ErrorDto(message, code));
         return errors;
+    }
+
+    /**
+     * NAICOM does not always answer with JSON. A read timeout or a connect failure arrives from
+     * {@link ThirdPartyApiClient} as a plain sentence ("timeout Encountered while posting Naicom
+     * Policy"), and a gateway in front of it can answer with a reason phrase or an HTML page.
+     * Handing any of those to {@code new JSONObject(...)} threw
+     * "A JSONObject text must begin with a brace" out of the posting service, which surfaced as a raw
+     * stage=POST ERROR and lost the actual reason. Parse leniently instead and let the caller
+     * report the body it did get.
+     *
+     * @return the parsed object, or null when the body is not a JSON object at all.
+     */
+    private static JSONObject parseJsonBody(String body) {
+        if (body == null || body.isBlank() || "null".equals(body)) {
+            return null;
+        }
+        try {
+            return new JSONObject(body);
+        } catch (JSONException e) {
+            return null;
+        }
+    }
+
+    /**
+     * The outcome for a call that came back without a usable JSON body: a failure carrying the
+     * body NAICOM (or whatever sits in front of it) actually returned, with the audit row written
+     * the same way the normal path writes it.
+     */
+    private NaicomPolicyResponseDto unreadableResponse(NaicomPolicyResponseDto response,
+                                                       IncomingRequest incomingRequest,
+                                                       HttpStatus status, String body) {
+        String detail = "NAICOM returned no usable JSON (HTTP " + status.value() + "): " + summariseBody(body);
+        response.setSuccess(false);
+        // A transport failure now arrives as 502/504; only a genuine 200 with a non-JSON body
+        // still needs a status of our own.
+        response.setStatus(status.value() == 200 ? HttpStatus.BAD_GATEWAY : status);
+        response.setMessage(detail);
+        response.setErrors(singleError(detail, "TEX-502"));
+        response.setNaicom_response(body);
+
+        incomingRequest.setResponseBody(incomingRequestService.truncate(body));
+        incomingRequest = saveIncomingRequestSafely(incomingRequest);
+        response.setTurnquest_request_id(incomingRequest.getId());
+        return response;
+    }
+
+    /** Enough of an unparseable body to identify it, without dragging an HTML page into a log line. */
+    private static String summariseBody(String body) {
+        if (body == null || body.isBlank()) {
+            return "<empty body>";
+        }
+        String oneLine = body.replaceAll("\\s+", " ").trim();
+        return oneLine.length() > 300 ? oneLine.substring(0, 300) + "..." : oneLine;
     }
 
     private ArrayList<ErrorDto> mapNaicomErrors(JSONArray errorMessages, JSONArray errorCodes) {

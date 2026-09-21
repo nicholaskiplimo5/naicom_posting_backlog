@@ -46,6 +46,16 @@ naicom:
     # dial that decides throughput. Raise it until NAICOM (not this app) becomes the limit.
     default-concurrency: ${BACKLOG_CONCURRENCY:8}
     max-concurrency: ${BACKLOG_MAX_CONCURRENCY:32}
+    retry:
+      # A failed policy is put through the whole pipeline again - re-selected, re-staged and
+      # re-posted - rather than just re-posted, so nothing is inherited from the failed attempt.
+      # Only NAICOM-side errors that clear on their own are retried: a timeout is not (the request
+      # may already have been applied) and neither is a missing-details rejection (it fails the
+      # same way every time). Set to 1 to switch retrying off.
+      # Total goes per policy, not extra ones: 3 is the first attempt plus two retries,
+      # and 1 switches retrying off. A plain counted loop, so this is a hard ceiling.
+      max-attempts: ${BACKLOG_RETRY_ATTEMPTS:3}
+      delay-ms: ${BACKLOG_RETRY_DELAY_MS:2000}
   http:
     # Idle connections kept alive for reuse; keep >= max-concurrency to avoid a TLS
     # handshake on nearly every post.
