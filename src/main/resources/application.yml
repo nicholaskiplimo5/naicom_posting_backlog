@@ -1,5 +1,5 @@
 server:
-  port: ${SERVER_PORT:8090}
+  port: 8090
   # Let an in-flight backlog run finish its current work before the datasource and transaction
   # manager are torn down. Without this a restart mid-run kills every in-flight policy with
   # "IO Error" and the failure log cannot be written ("singletons of this factory are in
@@ -12,9 +12,9 @@ spring:
   application:
     name: naicom-backlog-poster
   datasource:
-    url: ${DB_URL:jdbc:oracle:thin:@//10.6.12.85:1521/TQPDB}
-    username: ${DB_USERNAME:TQ_EXC}
-    password: ${DB_PASSWORD:EXC_2024}
+    url: jdbc:oracle:thin:@//10.6.12.85:1521/TQPDB
+    username: TQ_EXC
+    password: EXC_2024
     driver-class-name: oracle.jdbc.OracleDriver
     hikari:
       connection-timeout: 60000

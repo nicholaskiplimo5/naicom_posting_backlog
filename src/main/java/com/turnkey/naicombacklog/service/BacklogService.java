@@ -399,7 +399,7 @@ public class BacklogService {
         // action named in the log line is always the one that actually ran.
         NaicomPolicyResponseDto response = switch (action) {
             case "ENDORSE" -> naicomPostingService.endorsePolicy(policy);
-            case "RENEW" -> naicomPostingService.renewNaicomPolicy(policy);
+            case "RENEW" -> naicomPostingService.postSingleTransaction(policy);// naicomPostingService.renewNaicomPolicy(policy);
             case "TERMINATE" -> naicomPostingService.terminateNaicomPolicy(policy);
             case "DELETE" -> naicomPostingService.deleteNaicomPolicy(policy.getPolicy_unique_id(), policy);
             default -> naicomPostingService.postSingleTransaction(policy);
